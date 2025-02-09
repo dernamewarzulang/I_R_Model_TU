@@ -582,7 +582,11 @@ def InflitrationModel():
     def InputUnitFactorExplainer():
         inputPopup = tkinter.Toplevel(mainWindow)
         inputPopup.title("Information")
-        inputPopupLabel = ttk.Label(inputPopup, text= 'This model assumes rain intensity data in [mm/min]. Any data that is not resolved in minutes might lead to unpredictable behaviour. If your CSV file has a different unit then millimeter resolved per minute, you can enter a factor in "Unit Correction Factor" to convert your data into [mm/min]. EXAMPLE: Your CSV data is in [inch/min], so 25.4 is entered as a correction factor to archive [mm/min].', wraplength=300)
+        inputPopupLabel = ttk.Label(inputPopup, justify="left", text= 'This model assumes all data to be resolved in minutes. Any data that is not resolved in minutes might lead to unpredictable behaviour. All parameters given via the GUI (like hydraulic conductivity, evaporation, ...) are assumed to be constant over the entire simulation of the model.', wraplength=300)
+        inputPopupLabel.pack(padx=30, pady=30)
+        inputPopupLabel = ttk.Label(inputPopup, justify="left", text= 'If your CSV input file has a different unit then millimeter resolved per minute, you can enter a factor in "Unit Correction Factor" to convert your data into [mm/min]. EXAMPLE: Your CSV data is in [inch/min], so 25.4 is entered as a correction factor to archive [mm/min].', wraplength=300)
+        inputPopupLabel.pack(padx=30, pady=0)
+        inputPopupLabel = ttk.Label(inputPopup, justify="left", text= 'Any units shown as [Volume/Volume] are referring to a volume fraction of the sorrounding soil, so 100% = 1, 50% = 0.5 and 0% = 0.', wraplength=300)
         inputPopupLabel.pack(padx=30, pady=30)
     inputUnitFactorExplainer = ttk.Button(inpuFileButtonFrame, text="Help with Units", command=InputUnitFactorExplainer)
     inputUnitFactorExplainer.pack(side="right")
@@ -790,7 +794,7 @@ def InflitrationModel():
         
         RunSimulation()
         
-    DebugValues()
+    #DebugValues()
     
     
     
