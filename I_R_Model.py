@@ -17,7 +17,7 @@ def InflitrationModel():
     
     def RunSimulation():
         
-        # progressbar danmit man sieht das was passiert
+        # progressbar so we can see that something is happening
         nonlocal mainWindow
         progressbar = ttk.Progressbar(mainWindow)
         progressbar.place(anchor="sw", relwidth=1, relx=0, rely=1)
@@ -25,7 +25,7 @@ def InflitrationModel():
         progressbarCurrentState = 0
         mainWindow.update()
         
-        # alle datensätze zurücksetzten, damit keine überesste von vorheriger simulation probleme bereiten
+        # reset all databases so there are no errors wher running multiple times without closing the GUI in between
         nonlocal outputdata
         outputdata = pd.DataFrame()
         nonlocal layer1WaterDistribution
@@ -34,6 +34,7 @@ def InflitrationModel():
         layer1WaterDistributionPercent = pd.DataFrame()
         
         
+        # read the unit correction factor 
         inputFileName = filePathBox.get()
         inputSeperator = inputSeperatorBox.get()
         inputColumnName = inputColumnNameBox.get()
@@ -48,13 +49,13 @@ def InflitrationModel():
             return
         
         
-        try: # Parameter für das layer
-            thickness1 = float(inputLayer1ThicknessBox.get()) # storage vom layer ist Tickness * Porosity[mm] 
+        try: # read the parameters for the upper layer
+            thickness1 = float(inputLayer1ThicknessBox.get()) # storage of the upper layer is Tickness [mm] * Porosity
             hydraulicCon1 = float(inputLayer1HydraulicConBox.get()) # [mm/min]
             porosity1 = float(inputLayer1PorosityBox.get())   # [Vol/Vol]
             initialWatercontent1 = float(inputLayer1InitialH2OBox.get()) # [Vol/Vol]
             fieldCapacity1 = float(inputLayer1FieldKapacityBox.get()) # [Vol/Vol]
-            if initialWatercontent1 > porosity1 or fieldCapacity1 > porosity1:
+            if initialWatercontent1 > porosity1 or fieldCapacity1 > porosity1: # make shure we dont have conflicting parameters
                 inputPopup = tkinter.Toplevel(mainWindow)
                 inputPopup.title("ERROR")
                 inputPopupLabel = ttk.Label(inputPopup, text= 'ERROR: The Initial water content and Field Capacity cannot be larger then the porosity.', wraplength=200)
@@ -69,11 +70,10 @@ def InflitrationModel():
             progressbar.destroy()
             return
         
-        try: # Parameter für das untere Model Boundary
+        try: # parameters for the lower model boundary
             HydraulicConacity2 = float(inputlayer2HydraulicConBox.get()) # [mm/min]
             maxSufacePonding = float(inputMaxPondingBox.get())   # [mm]
             evaporation = float(inputEvaporationBox.get()) # [mm/min]
-            
         except:
             inputPopup = tkinter.Toplevel(mainWindow)
             inputPopup.title("ERROR")
@@ -83,9 +83,9 @@ def InflitrationModel():
             return
         
         ###############################################################################
-        # datenbanken einlesen und output vorbereiten
+        # read input CSV and prepare the output databank
         
-        # Datei einlesen mit Trennzeichen
+        # read file with given seperator
         try:
             inputdata = pd.read_csv(inputFileName, sep=inputSeperator, encoding='latin1')
         except:
@@ -101,10 +101,10 @@ def InflitrationModel():
         progressbarCurrentState = 1
         mainWindow.update()
         
-        #Neuen df machen - für die output sachen
+        # create colums in the output dataframe
         try:
-            outputdata["Intensity"] = inputdata[inputColumnName] * inputUnitFactor
-            outputdata["Surface Infiltration"] = "" # die sind hier auch drinne damit es übersichtlicher ist
+            outputdata["Intensity"] = inputdata[inputColumnName] * inputUnitFactor  # this is the reason for the "try:", the other columns are just in here to keap a better overwiew of the existing columns
+            outputdata["Surface Infiltration"] = ""
             outputdata["Runoff"] = ""
             outputdata["Current Surface Ponding"] = ""
             outputdata["Lower Layer Infiltration"] = ""
@@ -119,14 +119,14 @@ def InflitrationModel():
             progressbar.destroy()
             return
         
-        outputdata.index = outputdata.index + 1 # indexe verschieben damit bei der verarbeitung in der simulation von 1 angefagen werden kann (dannbrauch es keine spezielle if qualifier für die erste oder letzte zeile)
+        outputdata.index = outputdata.index + 1 # move all indecese so we can provide a starting point in the database of the sublayers that is at time 0. otherwhise we would have to do special cases for the data access just for the first itteration.
         
         
         ###############################################################################
-        # funktionen definieren
+        # define functions used in simulation
         
         
-        def LogSurfaceInteractions(currentSurfaceInfiltration): # infiltrationsfunktion innerhalb der simulationsfunktion um variablenzugriff zu vereinfachen
+        def LogSurfaceInteractions(currentSurfaceInfiltration): # handels runnoff and saving data to output data frame
             
             nonlocal currentLayer1Storage
             currentLayer1Storage = currentLayer1Storage + currentSurfaceInfiltration
@@ -134,18 +134,18 @@ def InflitrationModel():
             currentSurfacePonding = currentSurfacePonding - currentSurfaceInfiltration
             
             nonlocal runOff
-            if currentSurfacePonding > maxSufacePonding: # runnoff berechnen
+            if currentSurfacePonding > maxSufacePonding: # calculate runoff
                 runOff = currentSurfacePonding - maxSufacePonding
                 currentSurfacePonding = maxSufacePonding
             else:
                 runOff = 0
                 
-            # alle daten speichern, wird hier alles auf einnmal gemacht um die zugriffe auf den dataframe zu minimieren damit es schneller läuft
+            # save all produced data to the output dataframe - this is happening in one call because it will hapen every simulated minute and would otherwhise slow down the simlation by handeling too many dataframe access calls.
             outputdata.loc[timeIndex] = [outputdata.at[timeIndex,"Intensity"], currentSurfaceInfiltration, runOff, currentSurfacePonding, currentLowerLayerInfiltration, currentEvaporation, currentLayer1Storage, sum(layer1WaterDistribution[timeIndex].values())]
                 
             
             
-        def MoveFullWettingFrontDown(newFullWettingFrontPosition):
+        def MoveFullWettingFrontDown(newFullWettingFrontPosition): # this allows the marker for the wettingfront to move down all the way to the last fully filles sublayer. this helps when a wetting front "catches" a slower pocket of water and combines with it.
             nonlocal newFullWettingFront
             while layer1WaterDistribution[timeIndex][newFullWettingFrontPosition] >= hydraulicCon1:
                 newFullWettingFront = newFullWettingFrontPosition
@@ -153,12 +153,12 @@ def InflitrationModel():
         
         
         ###############################################################################
-        # initialwerte berechnen und setzten
+        # calculate initial values and instantiate variables to avoid instantiating them in every loop itteration
         
         
         sublayerThickness1 = hydraulicCon1/porosity1
-        sublayerCount1 = round(thickness1 / (sublayerThickness1)) # sublayer dicke so festlegen, dass pro minute immer eine schicht weiter geht (=haydraulic konductivity in [mm/min])
-        if sublayerCount1 < 3: # testen ob zu wenige su layer da sind, wenn ja: abbruch
+        sublayerCount1 = round(thickness1 / (sublayerThickness1)) # set the sublayer thickness so that the contained water can always move one sublayer every itteration (=haydraulic conductivity in [mm/min])
+        if sublayerCount1 < 3: # make shure we have enough sublayers to not runn into issues
             inputPopup = tkinter.Toplevel(mainWindow)
             inputPopup.title("ERROR")
             inputPopupLabel = ttk.Label(inputPopup, text= 'ERROR: The amount of sublayer resulting from the current inputs for the upper layer is below 3. This tool requires at least 3 Sublayers. The thickness of the sublayers is calculated as the distance water can travel within the soil over one minute by [Hydraulic Conductivity / Porosity]. The amount of sublayers then results from [Thickness of the upper layer / Thickness of the sublayers].', wraplength=360)
@@ -166,19 +166,19 @@ def InflitrationModel():
             progressbar.destroy()
             return
         
-        initialSublayerWatercontent1 = (sublayerThickness1) * initialWatercontent1 # konvertieren von Vol/Vol in mm wasser pro schicht
-        fieldCapacity1 = (sublayerThickness1) * fieldCapacity1 # konvertieren von Vol/Vol in mm wasser pro schicht
+        initialSublayerWatercontent1 = (sublayerThickness1) * initialWatercontent1 # convert Vol/Vol (volume fraction) into mm water per sublayer
+        fieldCapacity1 = (sublayerThickness1) * fieldCapacity1  # convert Vol/Vol (volume fraction) into mm water per sublayer
         
-        #Dictionary of Dictionary's:
+        # database for the sublayers. this is not a dataframe because it prooved to be very slow when accessing it many times per simluated minute per sublayer. dictionarys are way faster and "default dict" handles atomatic creation of missing keys.
         layer1WaterDistribution[0] = dict.fromkeys(range(sublayerCount1), initialSublayerWatercontent1)
         
-        ### initialwerte
+        ### initial values
         timeIndex = 1
         currentSurfacePonding = 0
         previousTimeStepLeftover = 0
         waterToBeMoved = 0
-        newFullWettingFront = -1 # die neuste gesättigte nassfront "schiebt" die fieldcapacity vor sich her damit die maximal angegeben infiltration erreicht wird (sonnst ist das maximum: max infiltration - field capcity)
-        currentLayer1Storage = thickness1 * initialWatercontent1
+        newFullWettingFront = -1 # a satturated wetting front that is still being "fed" from the top has the ability "push" water held in the field capacity in front of itself. this is important, because otherwhise the maximum infiltration will be hydraulic conductivity - fieldcapacity and never reach the intended maximum of hydraulic conductivity. 
+        currentLayer1Storage = thickness1 * initialWatercontent1 # this is the control value for the sum of all sublayer storage to spot errors
         currentLowerLayerInfiltration = 0
         runOff = 0
         currentEvaporation = 0
@@ -187,87 +187,86 @@ def InflitrationModel():
         
         
         ####################################################################################
-        ### Simulations Loop
+        ### simulation Loop for every minute
         
         
         print("Starting Simulation")
         for inputIntensity in outputdata["Intensity"]:
             
-            if timeIndex == progressbarCurrentState + progressbarStep: # es ist schneller die nur alle 100 schritte zu aktualisieren weil mainwindow.update() sehr langsam ist
+            if timeIndex == progressbarCurrentState + progressbarStep: # mainwindow.update() is very slow so it is faster to compare evry time and just update every 5% of progress
                 progressbar.step(progressbarStep)
                 progressbarCurrentState = progressbarCurrentState + progressbarStep
                 mainWindow.update()
                 
                 
             ####################################################################################
-            ### Wie viel Wasser versickert vom untersten Sublayer in das 2. Layer.
+            ### how much water infiltrates from the lowest sublayer into the lower soil layer?
             
             
-            # unterstes sublayer berechen
-            if layer1WaterDistribution[timeIndex-1][sublayerCount1-1] <= fieldCapacity1: # wenn das Wasser unterhalb der field capacity is mache nix
+            if layer1WaterDistribution[timeIndex-1][sublayerCount1-1] <= fieldCapacity1: # if water is below field capcity do nothing
                 previousTimeStepLeftover = layer1WaterDistribution[timeIndex-1][sublayerCount1-1]
                 currentLowerLayerInfiltration = 0
-            elif layer1WaterDistribution[timeIndex-1][sublayerCount1-1] - fieldCapacity1 < HydraulicConacity2: # wenn weniger infiltrieren kann als maximal (Hydraulic Conductivity 2) möglich
+            elif layer1WaterDistribution[timeIndex-1][sublayerCount1-1] - fieldCapacity1 < HydraulicConacity2: # if potential infiltration is lower then the maximum (Hydraulic Conductivity 2)
                 previousTimeStepLeftover = fieldCapacity1
                 currentLowerLayerInfiltration = layer1WaterDistribution[timeIndex-1][sublayerCount1-1] - fieldCapacity1
                 currentLayer1Storage = currentLayer1Storage - (layer1WaterDistribution[timeIndex-1][sublayerCount1-1] - fieldCapacity1)
-            else: # wenn mehr infiltrieren kann als maximal (Hydraulic Conductivity 2) möglich
+            else: # if potential infiltration is larger then the maximum (Hydraulic Conductivity 2)
                 previousTimeStepLeftover = layer1WaterDistribution[timeIndex-1][sublayerCount1-1] - HydraulicConacity2
                 currentLowerLayerInfiltration = HydraulicConacity2
                 currentLayer1Storage = currentLayer1Storage - HydraulicConacity2
            
             
             ####################################################################################
-            # durch alle "normalen" sublayer durch ittereieren
+            # itterate through all sublayers in between the lowest and the two highest
             
             
-            for subLayerIndex in reversed(range(2, sublayerCount1)): # reversed range damit von unten nach ob (sonnst "wellen" und weniger bewegung)
+            for subLayerIndex in reversed(range(2, sublayerCount1)): # reversed range so that we itterate from lowest to highest (otherwhise we get a wave like behavior as water from a sublayer tries to infiltrate into one bwlo it, without the one below having the chance to "give away" its own water even further down)
                 
-                if newFullWettingFront >= subLayerIndex-2: # wenn zwei layer drüber die neuste gesättigte nassfront ist
+                if newFullWettingFront >= subLayerIndex-2: # if a new wetting front is lower or at two layers above us
                     waterToBeMoved = layer1WaterDistribution[timeIndex-1][subLayerIndex-1]
-                    if previousTimeStepLeftover + waterToBeMoved >= hydraulicCon1: # wenn wir nich alles aufnehmen können weil unser layer schon viel hat
+                    if previousTimeStepLeftover + waterToBeMoved >= hydraulicCon1: # if we cant take all the water because we are already quite full
                         layer1WaterDistribution[timeIndex][subLayerIndex] = hydraulicCon1
                         previousTimeStepLeftover = waterToBeMoved - (hydraulicCon1 - previousTimeStepLeftover)
-                        if newFullWettingFront == subLayerIndex-2 or newFullWettingFront == subLayerIndex-1: # auf uns oder tiefer verschieben falls sie gerade über uns war
+                        if newFullWettingFront == subLayerIndex-2 or newFullWettingFront == subLayerIndex-1: # if it was just above us, move the wetting front down
                             MoveFullWettingFrontDown(subLayerIndex)
-                    else: # wenn alles bei uns rein passt und kleiner is als hydraulic conductivity
+                    else: # if all the water fits into our sublayer and is less then the maximum
                         layer1WaterDistribution[timeIndex][subLayerIndex] = previousTimeStepLeftover + waterToBeMoved
                         previousTimeStepLeftover = 0
                         
-                elif layer1WaterDistribution[timeIndex-1][subLayerIndex-1] > fieldCapacity1: # wenn ein layer drüber mehr drinne hat als field capacity
+                elif layer1WaterDistribution[timeIndex-1][subLayerIndex-1] > fieldCapacity1: # when the sublayer above us has more water then can be held by gravity (field capacity)
                     waterToBeMoved = layer1WaterDistribution[timeIndex-1][subLayerIndex-1] - fieldCapacity1
-                    if previousTimeStepLeftover + waterToBeMoved > hydraulicCon1: # wenn wir nich alles aufnehmen können weil unser layer schon viel hat
+                    if previousTimeStepLeftover + waterToBeMoved > hydraulicCon1: # if we cant take all the water because we are already quite full
                         layer1WaterDistribution[timeIndex][subLayerIndex] = hydraulicCon1
                         previousTimeStepLeftover = layer1WaterDistribution[timeIndex-1][subLayerIndex-1] - (hydraulicCon1 - previousTimeStepLeftover)
-                    else: # wenn alles ins nächste layer passt
+                    else: # if all the water fits into our sublayer and is less then the maximum
                         layer1WaterDistribution[timeIndex][subLayerIndex] = previousTimeStepLeftover + waterToBeMoved
                         previousTimeStepLeftover = layer1WaterDistribution[timeIndex-1][subLayerIndex-1] - waterToBeMoved
-                else: # wenn ein layer drüber weniger als die field capacity ist
-                    if previousTimeStepLeftover >= fieldCapacity1: # wenn unser layer mit leftover voller is als field capacity
+                else: # if the sublayer above us can hold all its water against gravity
+                    if previousTimeStepLeftover >= fieldCapacity1: # when our sublayer has more water then we can hold against gravity
                         waterToBeMoved = (fieldCapacity1 - layer1WaterDistribution[timeIndex-1][subLayerIndex-1]) / 2
                         layer1WaterDistribution[timeIndex][subLayerIndex] = previousTimeStepLeftover - waterToBeMoved
                         previousTimeStepLeftover = layer1WaterDistribution[timeIndex-1][subLayerIndex-1] + waterToBeMoved
-                    else: # wenn unser layer auch weniger hat as fieldcapacity
+                    else: # if our sublayer can also hold all its water against gravity
                         waterToBeMoved = (previousTimeStepLeftover - layer1WaterDistribution[timeIndex-1][subLayerIndex-1]) / 2
                         layer1WaterDistribution[timeIndex][subLayerIndex] = previousTimeStepLeftover - waterToBeMoved
                         previousTimeStepLeftover = layer1WaterDistribution[timeIndex-1][subLayerIndex-1] + waterToBeMoved
                         
                         
             ####################################################################################
-            # 1. und 2. sublayer + infiltration + evaporation + neuste gesättigte nassfront erstellen/beenden
+            # 1. and 2. sublayer + infiltration + evaporation + starting/maintaining/ending wetting fronts
             
             
-            currentSurfacePonding = currentSurfacePonding + inputIntensity # wie viel wassersteht diese minute zum inflitrieren bereit
-            if currentSurfacePonding >= evaporation: # wenn genug da is um aus dem ponding zu verdunsten
+            currentSurfacePonding = currentSurfacePonding + inputIntensity # how much water is on the surface this minute
+            if currentSurfacePonding >= evaporation: # when there is enough ponded to cover evaporation
                 currentSurfacePonding = currentSurfacePonding - evaporation
                 currentEvaporation = evaporation
                 previosSublayer0Leftover = layer1WaterDistribution[timeIndex-1][0]
-            elif layer1WaterDistribution[timeIndex-1][0] + currentSurfacePonding > evaporation:
+            elif layer1WaterDistribution[timeIndex-1][0] + currentSurfacePonding > evaporation: # when some evaporation has to hapen from the first sublayer, but its enough for maximum evaporation
                 previosSublayer0Leftover = layer1WaterDistribution[timeIndex-1][0] - (evaporation - currentSurfacePonding)
                 currentLayer1Storage = currentLayer1Storage - (evaporation - currentSurfacePonding)
                 currentSurfacePonding = 0
                 currentEvaporation = evaporation
-            else:
+            else: # if there is less water then could evaporate ponded + 1. sublayer
                 currentEvaporation = layer1WaterDistribution[timeIndex-1][0] + currentSurfacePonding
                 currentLayer1Storage = currentLayer1Storage - layer1WaterDistribution[timeIndex-1][0]
                 currentSurfacePonding = 0
@@ -276,63 +275,62 @@ def InflitrationModel():
             
             
             
-            if newFullWettingFront == -1: # wenn gerade keine gesättigte nassfront unterwegs ist
-                # gucken was sich bewegen sollte, unabhängig vom ponding
-                if previosSublayer0Leftover > fieldCapacity1:  # wenn im obersten sublayer mehr drinne hat als field capacity
+            if newFullWettingFront == -1: # if we dont have a wetting front right now
+                # calculate the hypothetical water movement between the two upper layer
+                if previosSublayer0Leftover > fieldCapacity1:  # when the 1. sublayer has more water then can be held by gravity (field capacity)
                     waterToBeMoved = previosSublayer0Leftover - fieldCapacity1
-                    if previousTimeStepLeftover + waterToBeMoved >= hydraulicCon1: # wenn nich alles bei uns reinpasst
+                    if previousTimeStepLeftover + waterToBeMoved >= hydraulicCon1: # if the 2. sublayer cant take all the water because we are already quite full
                         waterToBeMoved = waterToBeMoved - (previousTimeStepLeftover + waterToBeMoved - hydraulicCon1)                    
-                elif previousTimeStepLeftover >= fieldCapacity1: # wenn im obersten sublayer weniger als die field capacity ist und unser layer mit leftover voller is als field capacity
+                elif previousTimeStepLeftover >= fieldCapacity1: # if the 1. sublayer can hold all its water against gravity and the 2. cant
                     waterToBeMoved = (previosSublayer0Leftover - fieldCapacity1) / 2
-                else: # wenn unser layer auch weniger hat as fieldcapacity
+                else: # if the 2. sublayer can also hold all its water against gravity
                     waterToBeMoved = (previosSublayer0Leftover - previousTimeStepLeftover) / 2
                 
-                # ensteht eine neue gesättigte nassfront?
-                if currentSurfacePonding + previosSublayer0Leftover - waterToBeMoved >= hydraulicCon1: # Ja: wenn wir erwarten, dass das oberste sublayer voll ist (unter berücksichtigung von dem dem wasser was sich bewegen sollte)
-                    if currentSurfacePonding + previosSublayer0Leftover <= hydraulicCon1: # wenn capilary rise für die überfüllung sorgt
+                # do we get a new weting front?
+                if currentSurfacePonding + previosSublayer0Leftover - waterToBeMoved >= hydraulicCon1: # yes: we expect the 1. sublayer to fill to capactiyt (taking into account the hypothetical water movement calculated)
+                    if currentSurfacePonding + previosSublayer0Leftover <= hydraulicCon1: # if water raising from the 2. sublayer is causing the first to reach capacity
                         layer1WaterDistribution[timeIndex][1] = previousTimeStepLeftover
                         layer1WaterDistribution[timeIndex][0] = currentSurfacePonding + previosSublayer0Leftover
-                        LogSurfaceInteractions(currentSurfacePonding) # übergib die veränderung am surface ponding
+                        LogSurfaceInteractions(currentSurfacePonding) # save values in output dataframe and calculate runoff
                     else:
-                        #  wie viel sich aus dem 1. ins 2. sublayer bewegen müsste damit es passt
-                        if currentSurfacePonding >= hydraulicCon1: # wenn das current surfcae ponding sehr viel ist
+                        if currentSurfacePonding >= hydraulicCon1: # if the surfcae water available exceeds infiltration capacity
                             waterToBeMoved = previosSublayer0Leftover
-                        else: # wenn das current surfcae ponding nicht so viel ist
-                            waterToBeMoved = previosSublayer0Leftover - (hydraulicCon1 - currentSurfacePonding)
-                        if previousTimeStepLeftover + waterToBeMoved < hydraulicCon1: # es passt alles ins 2. sublayer
+                        else: # if the surface water available is less then the infiltration capacity
+                            waterToBeMoved = previosSublayer0Leftover - (hydraulicCon1 - currentSurfacePonding) #  how much water we would need to transfer from the 1. to the 2. sublayer to not exceed capacity in the 1.
+                        if previousTimeStepLeftover + waterToBeMoved < hydraulicCon1: # if everything that can move from the 1. sublayer into the 2. can do so
                             layer1WaterDistribution[timeIndex][1] = previousTimeStepLeftover + waterToBeMoved
                             layer1WaterDistribution[timeIndex][0] = hydraulicCon1
                             newFullWettingFront = 0
                             if currentSurfacePonding >= hydraulicCon1:
-                                LogSurfaceInteractions(hydraulicCon1) # übergib die veränderung am surface ponding
+                                LogSurfaceInteractions(hydraulicCon1) # save values in output dataframe and calculate runoff
                             else:
-                                LogSurfaceInteractions(currentSurfacePonding) # übergib die veränderung am surface ponding
-                        else: # wenn nich alles ins 1. und 2. sublayer passt
+                                LogSurfaceInteractions(currentSurfacePonding) # save values in output dataframe and calculate runoff
+                        else: # if the 2. sublayer would exceed capacity with the water from the 1.
                             layer1WaterDistribution[timeIndex][1] = hydraulicCon1
                             layer1WaterDistribution[timeIndex][0] = hydraulicCon1
                             MoveFullWettingFrontDown(1)
-                            LogSurfaceInteractions(hydraulicCon1 - previosSublayer0Leftover + (hydraulicCon1 - previousTimeStepLeftover)) # übergib die veränderung am surface ponding
-                else: # Nein: das oberste sublayer wird nicht voll, alles kann infiltrieren
+                            LogSurfaceInteractions(hydraulicCon1 - previosSublayer0Leftover + (hydraulicCon1 - previousTimeStepLeftover)) # save values in output dataframe and calculate runoff
+                else: # no: the 1. sublayer will not exceed capacity, everything can infiltrate
                     layer1WaterDistribution[timeIndex][1] = previousTimeStepLeftover + waterToBeMoved
                     layer1WaterDistribution[timeIndex][0] = previosSublayer0Leftover - waterToBeMoved + currentSurfacePonding
-                    LogSurfaceInteractions(currentSurfacePonding) # übergib die veränderung am surface ponding
-            elif newFullWettingFront >= 0: # wenn schon eine gesättigte nassfront unterwegs ist
-                if currentSurfacePonding + previousTimeStepLeftover >= hydraulicCon1: # und es kommt genug wasser nach um sie zu erhalten
+                    LogSurfaceInteractions(currentSurfacePonding) # save values in output dataframe and calculate runoff
+            elif newFullWettingFront >= 0: # if we already have a wetting front
+                if currentSurfacePonding + previousTimeStepLeftover >= hydraulicCon1: # if there is enough water on the surface to sustain the wetting front
                     layer1WaterDistribution[timeIndex][1] = hydraulicCon1
                     layer1WaterDistribution[timeIndex][0] = hydraulicCon1
-                    LogSurfaceInteractions(hydraulicCon1 - previousTimeStepLeftover) # übergib die veränderung am surface ponding
-                    if newFullWettingFront == 0 or newFullWettingFront == 1: # auf uns oder tiefer verschieben falls sie gerade über uns war
+                    LogSurfaceInteractions(hydraulicCon1 - previousTimeStepLeftover) # save values in output dataframe and calculate runoff
+                    if newFullWettingFront == 0 or newFullWettingFront == 1: # if it was in the 1. or 2. sublayer, move the wetting front down
                         MoveFullWettingFrontDown(1)
-                else: # es kommt nich genug nach um sie zu erhalten
-                    newFullWettingFront = -1 # wetting front beendet
-                    if currentSurfacePonding + previousTimeStepLeftover >= fieldCapacity1: # es ist genug um die field capacity zu füllen
+                else: # there is not enough water on the surface to sustain the wetting front
+                    newFullWettingFront = -1 # stop the wetting front
+                    if currentSurfacePonding + previousTimeStepLeftover >= fieldCapacity1: # there is enough water to fille the field capacity in the 1. sublayer
                         layer1WaterDistribution[timeIndex][1] = previosSublayer0Leftover
                         layer1WaterDistribution[timeIndex][0] = currentSurfacePonding + previousTimeStepLeftover
-                        LogSurfaceInteractions(currentSurfacePonding) # übergib die veränderung am surface ponding
-                    else: # es ist nich genug da um die field capacity zu füllen
+                        LogSurfaceInteractions(currentSurfacePonding) # save values in output dataframe and calculate runoff
+                    else: # there is too little water to fill the field capacity in the 1. sublayer
                         layer1WaterDistribution[timeIndex][1] = previosSublayer0Leftover - (fieldCapacity1 - currentSurfacePonding - previousTimeStepLeftover)
                         layer1WaterDistribution[timeIndex][0] = fieldCapacity1
-                        LogSurfaceInteractions(currentSurfacePonding) # übergib die veränderung am surface ponding
+                        LogSurfaceInteractions(currentSurfacePonding) # save values in output dataframe and calculate runoff
             
             
             
@@ -347,46 +345,47 @@ def InflitrationModel():
         UpdateMainPlot()
         
         ###########################################################################
-        # detail plot neu bauen
+        # construct the detail plot
         
         progressbar.step(progressbarStep)
         mainWindow.update()
         
-        depthList = [] # zeigt die tiefe [mm] auf der y-achse an anstelle des sublayer counts
+        depthList = [] # needed to have [mm] dpeth on the y-achses and not the sublayer count
         for key in layer1WaterDistribution[1].keys():
             depthList.append(key * (sublayerThickness1))
         
-        # convertiere x-achse in volumen prozente, damit gesamt wassermenge aus x*y abgeleitet werden kann
-        layer1WaterDistributionPercent = pd.DataFrame.from_dict(layer1WaterDistribution) # in nem dataframe weil einfacher als in dict und genauso schnell
+        # convert x-achses in volume/volume, so that the total amount of water in mm can be derived from x*y
+        layer1WaterDistributionPercent = pd.DataFrame.from_dict(layer1WaterDistribution) # convert to dataframe for easy handeling
         layer1WaterDistributionPercent = layer1WaterDistributionPercent/0.15
-        layer1WaterDistributionPercent = layer1WaterDistributionPercent.iloc[::-1] # umdrehen, damit wasser im graphen von oben nach unten fließt
+        layer1WaterDistributionPercent = layer1WaterDistributionPercent.iloc[::-1] # invert order so the water flows down in the graph and not up
         
         
         progressbar.step(progressbarStep)
         mainWindow.update()
         
-        detailPlot.clf() # alles alte weg
-        nonlocal detailWaterDistributionSubplot # bau den plott wieder auf
+        # the deatiled location of the water in the upper layer
+        detailPlot.clf() # clear all old plot elements to prevent bugs when displaying new ones
+        nonlocal detailWaterDistributionSubplot
         detailWaterDistributionSubplot = detailPlot.add_subplot()
         nonlocal detailPlotLine
         detailPlotLine = detailWaterDistributionSubplot.plot(layer1WaterDistributionPercent[0], depthList, label = "Water Distribution")
-        detailPlotLine = detailPlotLine[0] # aus irgendeinem grund wird das sonnst in eine liste mit nur einem eintrag gespeichert -> das holt es da raus und macht es dierekt in ein Lin2D object
+        detailPlotLine = detailPlotLine[0] # for some reason this variable is saved in a list with a singlke entry -> this line removes the list part and makes it a Lin2D object
         fieldCapacity1 = fieldCapacity1/sublayerThickness1
         detailWaterDistributionSubplot.add_line(plt.lines.Line2D([fieldCapacity1,fieldCapacity1],[thickness1,0], color="#888888", label="Field Capacity", linestyle = (0, (4, 4))))
-        detailWaterDistributionSubplot.set_xlim(0, porosity1 *1.02) # zoomt die x achse auf 2% größer als der größte wert
+        detailWaterDistributionSubplot.set_xlim(0, porosity1 *1.02) # zoomt the x-achses to 2% larger then the largest value -> this prevents rezising of the plot for each new minute displayed
         detailWaterDistributionSubplot.invert_yaxis()
         detailWaterDistributionSubplot.set(xlabel = "Water Amount [Volume/Volume]", ylabel = "Depth below Surface [mm]", title = "Water Distribution within Upper Layer at Minute 0")
         detailWaterDistributionSubplot.legend()
         
         detailPlotWidget.draw()
         
-        
-        detailIntensityPlot.clf() # alles alte weg
+        # a helper graph to see where the current time displayed is
+        detailIntensityPlot.clf() # clear all old plot elements to prevent bugs when displaying new ones
         detailIntensitySubplot = detailIntensityPlot.add_subplot()
         detailIntensitySubplot.plot(outputdata.index, outputdata["Intensity"], label = "Intensity")
         detailIntensitySubplot.set_xlim(0, len(layer1WaterDistribution))
         detailIntensitySubplot.set(ylabel = "[mm]")
-        nonlocal detailIntensityLine # nen lila strich damit man sieht wo man zeitlich ist
+        nonlocal detailIntensityLine # a purple line to show which time is selected
         detailIntensityLine = plt.lines.Line2D([0, 0],[-10, outputdata["Intensity"].max() + 10], color="magenta")
         detailIntensitySubplot.add_line(detailIntensityLine)
 
@@ -394,43 +393,43 @@ def InflitrationModel():
         
         
         nonlocal detailPlotControler
-        detailPlotControler.destroy() # controler auch weg 
+        detailPlotControler.destroy() # redo the controler bar to fit any changes in length of simulation 
         
         detailPlotControler = ttk.Scale(detailControlerFrame, from_=0, to=len(layer1WaterDistribution)-1, command=ScrollDetailPlot)
         detailPlotControler.pack(side="left", fill="x", padx=5, expand=True)
         
         
-        progressbar.destroy()
+        progressbar.destroy() # clear the progressbar
     
     
     
     ###############################################################################
-    # GUI und globale variablen
+    # GUI and "global" variables (to be able to better integrate this into other code, an overall function was created, and instead of using "global" we always use "nonlocal" to not conflict with other functions)
     
     
-    # globale variablen
+    # global variables
     outputdata = pd.DataFrame()
     layer1WaterDistribution = defaultdict(dict)
     layer1WaterDistributionPercent = pd.DataFrame()
     
-    # fenster erstellen
+    # construct window
     mainWindow = tkinter.Tk()
     mainWindow.state('zoomed')
     #mainWindow.geometry("1300x700")
     
-    # fenster in rechte und linke hälfte unterteilen
-    menueBar = ttk.Frame(mainWindow) # menüleiste
+    # divide the window into left and right halfes
+    menueBar = ttk.Frame(mainWindow) # area for input
     menueBar.pack(side="left", fill="y", expand=False)
-    menueTabs = ttk.Notebook(menueBar) # plot "Hülle" für tabs
+    menueTabs = ttk.Notebook(menueBar) 
     menueTabs.pack(side="left", fill="y", expand=False)
-    plotArea = ttk.Frame(mainWindow)
+    plotArea = ttk.Frame(mainWindow) # area for plots to go
     plotArea.pack(side="left", fill="both", expand=True)
-    plotTabs = ttk.Notebook(plotArea) # plot "Hülle" für tabs
+    plotTabs = ttk.Notebook(plotArea) 
     plotTabs.pack(side="left", fill="both", expand=True)
     
     # eyecandy
     mainWindow.title("Infiltration- and runoffmodel")
-    try: # icon eyecandy, in "try" damit nix kaput geht wenn das bild fehlt
+    try: # icon eyecandy, in "try" so nothing breaks when the icon is missing
         windowIcon = tkinter.PhotoImage(file = "icon.png")
         mainWindow.iconphoto(False, windowIcon)
         logo = ttk.Label(menueBar, image=windowIcon, padding=10)
@@ -442,7 +441,7 @@ def InflitrationModel():
     
     
     ###############################################################################
-    # plots erstellen
+    # plots
     
     
     
@@ -451,11 +450,11 @@ def InflitrationModel():
     mainPlotTab.pack(side="top", fill="both", expand=True)
     plotTabs.add(mainPlotTab, text="Summary")
     
-    mainPlot = plt.figure.Figure() # den canvas für den plot
-    mainPlotWidget = FigureCanvasTkAgg(mainPlot, master=mainPlotTab) # den canvas in tkinter integrienren
+    mainPlot = plt.figure.Figure() # the canvas for the plot togo on
+    mainPlotWidget = FigureCanvasTkAgg(mainPlot, master=mainPlotTab) # integrate the canvas into tkinter
     mainPlotWidget.get_tk_widget().pack(side="top", fill="both", expand=True)
     
-    mainSubplot = mainPlot.add_subplot() # leerer plot damit das fenster am anfang nich leeer is
+    mainSubplot = mainPlot.add_subplot() # create an empty plot so the window isnt empty on startup and the user knows what to expect
     mainSubplot.set(xlabel = "time [min]", ylabel = "Water Amount [mm]", title = "Summary")
     
     mainToolBarRestricor = ttk.Frame(mainPlotTab)
@@ -464,10 +463,10 @@ def InflitrationModel():
     mainToolBar.pack(side="bottom")
     
     def UpdateMainPlot():
-        mainPlot.clf() # lösche alles alte vom canvas
-        mainSubplot = mainPlot.add_subplot() # mach nen neuen plot
+        mainPlot.clf() # clear all old stuff from the canvas
+        mainSubplot = mainPlot.add_subplot() # create new plot to put things on
         mainSubplot.set(xlabel = "time [min]", ylabel = "Water Amount [mm]", title = "Summary")
-        try:
+        try: # this is in "try:" so when users use the checkboxes before generating data noting breaks
             if intensityActive.get():
                 mainSubplot.plot(outputdata.index, outputdata["Intensity"], label = "Intensity", color="blue")
             if surfacePondingActive.get():
@@ -501,35 +500,35 @@ def InflitrationModel():
     
     detailIntensityFrame = ttk.Frame(detailPlotTab)
     detailIntensityFrame.pack(side="top", fill="x")
-    detailIntensityPlot = plt.figure.Figure(layout='constrained', figsize=(1, 100/plt.rcParams['figure.dpi']), ) # den canvas für den plot
-    detailIntensityPlotWidget = FigureCanvasTkAgg(detailIntensityPlot, master=detailIntensityFrame) # den canvas in tkinter integrieren
+    detailIntensityPlot = plt.figure.Figure(layout='constrained', figsize=(1, 100/plt.rcParams['figure.dpi']), ) # the canvas for the plot to go on
+    detailIntensityPlotWidget = FigureCanvasTkAgg(detailIntensityPlot, master=detailIntensityFrame) # integrate the canvas into tkinter
     detailIntensityPlotWidget.get_tk_widget().pack(side="left", fill="x", expand=True)
-    detailIntensityLine = plt.lines.Line2D((),(), color="magenta")
+    detailIntensityLine = plt.lines.Line2D((),(), color="magenta") # these variables hold the data that gets changed when moving the tim controler -> this is faster and more responsive then deleting everything an plotting it new
     detailIntensityLabelMin = tkinter.Label(detailIntensityFrame, text="time [min]", background="white", font=("Helvetica", 12))
     detailIntensityLabelMin.place(anchor="se", rely=0.9, relx=1)
-    detailIntensitySubplot = detailIntensityPlot.add_subplot() # leerer plot damit das fenster am anfang nich leeer is und komisch aussieht
+    detailIntensitySubplot = detailIntensityPlot.add_subplot() # create an empty plot so the window isnt empty on startup and the user knows what to expect
     detailIntensitySubplot.set(ylabel = "[mm]")    
     
     
     detailControlerFrame = ttk.Frame(detailPlotTab)
     detailControlerFrame.pack(side="top", fill="x")
-    detailPlot = plt.figure.Figure(layout='constrained') # den canvas für den plot
-    detailPlotWidget = FigureCanvasTkAgg(detailPlot, master=detailPlotTab) # den canvas in tkinter integrieren
+    detailPlot = plt.figure.Figure(layout='constrained') # the canvas for the plot to go on
+    detailPlotWidget = FigureCanvasTkAgg(detailPlot, master=detailPlotTab) # integrate the canvas into tkinter
     detailPlotWidget.get_tk_widget().pack(side="top", fill="both", expand=True)
 
     
     # initiale variablen damit beim ersten mal nix fehler prodoziert
     detailMinuteLabel = tkinter.Label(detailControlerFrame, text="Minute:", font=("Helvetica", 11, "bold"))
     detailMinuteLabel.pack(side="left", padx=5)
-    detailPlotControler = ttk.Scale(detailControlerFrame) # initiate dummy widged damit es beim ersten ploten gelöscht werden kann
+    detailPlotControler = ttk.Scale(detailControlerFrame) # create a dummy controler so it can be destroid when doing the first simulation and not cause errors
     detailPlotControler.pack(side="left", fill="x", padx=5, expand=True)
-    detailPlotLine = plt.lines.Line2D((),()) # das ist die variable die überschrieben wird wenn der slider bewegt wird -> ist schneller als löschen und neu plotten
-    detailWaterDistributionSubplot = detailPlot.add_subplot() # leerer plot damit das fenster am anfang nich leeer is und komisch aussieht
+    detailPlotLine = plt.lines.Line2D((),()) # these variables hold the data that gets changed when moving the tim controler -> this is faster and more responsive then deleting everything an plotting it new
+    detailWaterDistributionSubplot = detailPlot.add_subplot() # create an empty plot so the window isnt empty on startup and the user knows what to expect
     detailWaterDistributionSubplot.set(xlabel = "Water Amount [Volume/Volume]", ylabel = "Depth below Surface [mm]", title = "Water Distribution within Upper Layer at Minute 0")
     
     
     def ScrollDetailPlot(timeIndex):
-        timeIndex = float(timeIndex) # die werte kommen als string -> muss int draus machen
+        timeIndex = float(timeIndex) # this value is a string from the widged -> need to convert it into int
         timeIndex = int(timeIndex)
         detailPlotLine.set_xdata([layer1WaterDistributionPercent[timeIndex]])
         detailWaterDistributionSubplot.set_title("Water Distribution within Upper Layer at Minute " + str(timeIndex))
@@ -546,7 +545,7 @@ def InflitrationModel():
     detailToolBar.pack(side="bottom")
     
     
-    # File sektion in plotArea erstellen
+    # create the file line on the top right
     fileFrame = ttk.Frame(plotArea)
     fileFrame.place(rely=0, relx=1, anchor="ne")
     filePathBox = ttk.Entry(fileFrame, width=40)
@@ -558,19 +557,19 @@ def InflitrationModel():
     
     
     ###############################################################################
-    # input erstellen 
+    # input 
     
     
     inputMenueTab = ttk.Frame(menueTabs) # frame
     inputMenueTab.pack(side="left", fill="y", expand=False)
     menueTabs.add(inputMenueTab, text="Input")
     
-        # File sektion in inputMenueTab erstellen
+        # create the file input in inputMenueTab
     inputFileFrame = ttk.LabelFrame(inputMenueTab, text="Input File", borderwidth=5)
     inputFileFrame.pack(side="top", padx=5, pady=5, fill="x")
     inpuFileButtonFrame = ttk.Frame(inputFileFrame)
     inpuFileButtonFrame.pack(side="top", pady=5, fill="x")
-    def ChooseInputFile():
+    def ChooseInputFile(): # the function that makes the popup apear to select a file
         inputFilePath = tkinter.filedialog.askopenfilename(initialdir = "/", title = "Select Input CSV File", filetypes = (("csv files","*.CSV"), ("all files","*.*")))
         filePathBox.delete(0,'end')
         filePathBox.insert(0, inputFilePath)
@@ -578,7 +577,7 @@ def InflitrationModel():
     inputSelectButton = ttk.Button(inpuFileButtonFrame, text="Choose CSV", command=ChooseInputFile)
     inputSelectButton.pack(side="left")
     
-        # eineheiten hilfe fenster
+        # the unit help window explainer thingy
     def InputUnitFactorExplainer():
         inputPopup = tkinter.Toplevel(mainWindow)
         inputPopup.title("Information")
@@ -591,7 +590,7 @@ def InflitrationModel():
     inputUnitFactorExplainer = ttk.Button(inpuFileButtonFrame, text="Help with Units", command=InputUnitFactorExplainer)
     inputUnitFactorExplainer.pack(side="right")
     
-        # welcher seperator ist in der datei
+        # the CSV seperator
     inputSeperatorFrame = ttk.Frame(inputFileFrame)
     inputSeperatorFrame.pack(side="top", pady=5, fill="x")
     inputSeperatorLabel = ttk.Label(inputSeperatorFrame, text="Value Seperator")
@@ -599,14 +598,14 @@ def InflitrationModel():
     inputSeperatorBox = ttk.Entry(inputSeperatorFrame, width=8)
     inputSeperatorBox.insert(0, ",")
     inputSeperatorBox.pack(side="right")
-        # relevante spalte
+        # the CSV column to use
     inputColumnFrame = ttk.Frame(inputFileFrame)
     inputColumnFrame.pack(side="top", pady=5, fill="x")
     inputColumnNameLabel = ttk.Label(inputColumnFrame, text="Column with [intensity/min] Data")#, wraplength=110)
     inputColumnNameLabel.pack(side="top", fill="x")
     inputColumnNameBox = ttk.Entry(inputColumnFrame, width=30)
     inputColumnNameBox.pack(side="top", fill="x")
-        # einheitenkorrektur
+        # correction factor if the unit in CSV is of
     inputUnitFactorFrame = ttk.Frame(inputFileFrame)
     inputUnitFactorFrame.pack(side="top", pady=5, fill="x")
     inputUnitFactorLabel = ttk.Label(inputUnitFactorFrame, text="Unit Correction Factor")#, wraplength=110)
@@ -615,7 +614,7 @@ def InflitrationModel():
     inputUnitFactorBox.insert(0, 1)
     inputUnitFactorBox.place(anchor="ne", relx=1, rely=0)
     
-    # parameter input für layer 1
+    # parameters for layer 1
     inputLayer1Frame = ttk.LabelFrame(inputMenueTab, text="Surface Layer Parameters", borderwidth=5)
     inputLayer1Frame.pack(side="top", padx=5, pady=5, fill="x")
     
@@ -655,7 +654,7 @@ def InflitrationModel():
     inputLayer1FieldKapacityBox.pack(side="right")
     
     
-    # parameter input für Model Boundary
+    # parameters for the model boundary
     inputlayer2Frame = ttk.LabelFrame(inputMenueTab, text="Model Boundary Parameters", borderwidth=5)
     inputlayer2Frame.pack(side="top", padx=5, pady=5, fill="x")
     
@@ -683,7 +682,7 @@ def InflitrationModel():
 
     
     
-    # start und export bvutton und funktionen
+    # start and export buttons and functions
     startButton = ttk.Button(inputMenueTab, text="Start Simulation", command=RunSimulation)
     startButton.pack(side="top", padx=10, pady=5)
     
@@ -698,7 +697,7 @@ def InflitrationModel():
     def ExportUperLayerData():
         file = tkinter.filedialog.asksaveasfile(initialdir = "/", title = "Save Sublayer Data [Volume/Volume] as CSV File", defaultextension=".csv", filetypes = (("csv files","*.CSV"), ("all files","*.*")))
         if file:
-            layer1WaterDistributionPercent.iloc[::-1].transpose().to_csv(file) # umdrehen damit das obere sublayer oben ist und sublayer - spaltren, zeit - zeilen
+            layer1WaterDistributionPercent.iloc[::-1].transpose().to_csv(file) # reverse the order and swapp the axis so that the sublayers are descending and the rows are for time
             file.close()
     inputSelectButton = ttk.Button(inputMenueTab, text="Export Sublayer Data [Volume/Volume]", command=ExportUperLayerData)
     inputSelectButton.pack(side="top", padx=10, pady=5)
@@ -706,7 +705,7 @@ def InflitrationModel():
     
     
     #######################################################################################
-    # Plot control tab
+    # Plot control tab - a bunch of checkboxes that turn variables true/false for the sumary plot update function to use
     
     
     plotControlTab = ttk.Frame(menueTabs, padding=10) # frame
@@ -792,7 +791,7 @@ def InflitrationModel():
         
         mainWindow.update()
         
-        RunSimulation()
+        #RunSimulation()
         
     #DebugValues()
     
